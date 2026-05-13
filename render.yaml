@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: whoop-mcp-server
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WHOOP_CLIENT_ID
+        sync: false
+      - key: WHOOP_CLIENT_SECRET
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: WHOOP_REFRESH_TOKEN
+        sync: false

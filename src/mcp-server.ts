@@ -1,564 +1,168 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { WhoopApiClient } from './whoop-api.js';
-import { WhoopApiConfig } from './types.js';
 
-export class WhoopMcpServer {
-  private server: Server;
-  private whoopClient: WhoopApiClient;
+const paginationProps = {
+  limit: { type: 'number' as const, description: 'Limit (max 25)' },
+  start: { type: 'string' as const, description: 'ISO 8601 start filter' },
+  end: { type: 'string' as const, description: 'ISO 8601 end filter' },
+  nextToken: { type: 'string' as const, description: 'Pagination token' },
+};
 
-  constructor(config: WhoopApiConfig) {
-    this.whoopClient = new WhoopApiClient(config);
-    
-    this.server = new Server(
-      {
-        name: 'whoop-mcp-server',
-        version: '1.0.0',
+const tools: Tool[] = [
+  {
+    name: 'whoop_get_user_profile',
+    description: 'Get basic WHOOP user profile (name, email, user_id) for the authenticated user',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'whoop_get_user_body_measurements',
+    description: 'Get body measurements (height, weight, max heart rate) for the authenticated user',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'whoop_get_cycle_collection',
+    description: 'Get paginated physiological cycles with strain and heart rate metrics',
+    inputSchema: { type: 'object', properties: paginationProps, required: [] },
+  },
+  {
+    name: 'whoop_get_cycle_by_id',
+    description: 'Get one physiological cycle by ID',
+    inputSchema: {
+      type: 'object',
+      properties: { cycleId: { type: 'number', description: 'Cycle ID' } },
+      required: ['cycleId'],
+    },
+  },
+  {
+    name: 'whoop_get_sleep_for_cycle',
+    description: 'Get sleep data for a specific cycle',
+    inputSchema: {
+      type: 'object',
+      properties: { cycleId: { type: 'number', description: 'Cycle ID' } },
+      required: ['cycleId'],
+    },
+  },
+  {
+    name: 'whoop_get_recovery_collection',
+    description: 'Get paginated recovery data (recovery score, HRV, RHR, SpO2, skin temp)',
+    inputSchema: { type: 'object', properties: paginationProps, required: [] },
+  },
+  {
+    name: 'whoop_get_recovery_for_cycle',
+    description: 'Get recovery data for a specific cycle',
+    inputSchema: {
+      type: 'object',
+      properties: { cycleId: { type: 'number', description: 'Cycle ID' } },
+      required: ['cycleId'],
+    },
+  },
+  {
+    name: 'whoop_get_sleep_collection',
+    description: 'Get paginated sleep records (stages, performance, respiratory rate)',
+    inputSchema: { type: 'object', properties: paginationProps, required: [] },
+  },
+  {
+    name: 'whoop_get_sleep_by_id',
+    description: 'Get one sleep record by ID',
+    inputSchema: {
+      type: 'object',
+      properties: { sleepId: { type: 'string', description: 'Sleep record UUID' } },
+      required: ['sleepId'],
+    },
+  },
+  {
+    name: 'whoop_get_workout_collection',
+    description: 'Get paginated workouts (strain, heart rate zones, distance, altitude)',
+    inputSchema: { type: 'object', properties: paginationProps, required: [] },
+  },
+  {
+    name: 'whoop_get_workout_by_id',
+    description: 'Get one workout record by ID',
+    inputSchema: {
+      type: 'object',
+      properties: { workoutId: { type: 'string', description: 'Workout UUID' } },
+      required: ['workoutId'],
+    },
+  },
+  {
+    name: 'whoop_revoke_user_access',
+    description: 'Revoke the current access token (logs the user out of this server)',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+];
+
+export function buildMcpServer(client: WhoopApiClient): Server {
+  const server = new Server(
+    { name: 'whoop-mcp-server', version: '2.0.0' },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    const a = (args ?? {}) as Record<string, unknown>;
+    const pag = {
+      limit: a.limit as number | undefined,
+      start: a.start as string | undefined,
+      end: a.end as string | undefined,
+      nextToken: a.nextToken as string | undefined,
+    };
+
+    const asText = (v: unknown) => ({
+      content: [{ type: 'text' as const, text: JSON.stringify(v, null, 2) }],
+    });
+
+    try {
+      switch (name) {
+        case 'whoop_get_user_profile':
+          return asText(await client.getUserProfile());
+        case 'whoop_get_user_body_measurements':
+          return asText(await client.getUserBodyMeasurements());
+        case 'whoop_get_cycle_collection':
+          return asText(await client.getCycleCollection(pag));
+        case 'whoop_get_cycle_by_id':
+          return asText(await client.getCycleById(a.cycleId as number));
+        case 'whoop_get_sleep_for_cycle':
+          return asText(await client.getSleepForCycle(a.cycleId as number));
+        case 'whoop_get_recovery_collection':
+          return asText(await client.getRecoveryCollection(pag));
+        case 'whoop_get_recovery_for_cycle':
+          return asText(await client.getRecoveryForCycle(a.cycleId as number));
+        case 'whoop_get_sleep_collection':
+          return asText(await client.getSleepCollection(pag));
+        case 'whoop_get_sleep_by_id':
+          return asText(await client.getSleepById(a.sleepId as string));
+        case 'whoop_get_workout_collection':
+          return asText(await client.getWorkoutCollection(pag));
+        case 'whoop_get_workout_by_id':
+          return asText(await client.getWorkoutById(a.workoutId as string));
+        case 'whoop_revoke_user_access':
+          await client.revokeUserAccess();
+          return { content: [{ type: 'text' as const, text: 'Access revoked. Re-authenticate at /authorize.' }] };
+        default:
+          throw new Error(`Unknown tool: ${name}`);
       }
-    );
-
-    this.setupToolHandlers();
-  }
-
-  private setupToolHandlers() {
-    // User tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const status =
+        typeof err === 'object' && err !== null && 'response' in err
+          ? ((err as { response?: { status?: number } }).response?.status ?? '')
+          : '';
+      const hint = status === 401 || /unauthorized|token/i.test(msg)
+        ? '\n\nHint: WHOOP token is missing or expired. Visit the /authorize endpoint of this server to re-authenticate.'
+        : '';
       return {
-        tools: [
-          // User tools
-          {
-            name: 'whoop-get-user-profile',
-            description: 'Get basic user profile information (name, email) for the authenticated user',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: 'whoop-get-user-body-measurements',
-            description: 'Get body measurements (height, weight, max heart rate) for the authenticated user',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: 'whoop-revoke-user-access',
-            description: 'Revoke the access token granted by the user',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: [],
-            },
-          },
-          // Cycle tools
-          {
-            name: 'whoop-get-cycle-by-id',
-            description: 'Get the cycle for the specified ID',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                cycleId: {
-                  type: 'number',
-                  description: 'ID of the cycle to retrieve',
-                },
-              },
-              required: ['cycleId'],
-            },
-          },
-          {
-            name: 'whoop-get-cycle-collection',
-            description: 'Get all physiological cycles for a user, paginated',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                limit: {
-                  type: 'number',
-                  description: 'Limit on the number of cycles returned (max 25)',
-                },
-                start: {
-                  type: 'string',
-                  description: 'Return cycles that occurred after or during this time (ISO 8601)',
-                },
-                end: {
-                  type: 'string',
-                  description: 'Return cycles that intersect this time or ended before this time (ISO 8601)',
-                },
-                nextToken: {
-                  type: 'string',
-                  description: 'Next token from the previous response to get the next page',
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: 'whoop-get-sleep-for-cycle',
-            description: 'Get sleep data for a specific cycle',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                cycleId: {
-                  type: 'number',
-                  description: 'ID of the cycle to get sleep data for',
-                },
-              },
-              required: ['cycleId'],
-            },
-          },
-          // Recovery tools
-          {
-            name: 'whoop-get-recovery-collection',
-            description: 'Get all recovery data for a user, paginated',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                limit: {
-                  type: 'number',
-                  description: 'Limit on the number of recovery records returned (max 25)',
-                },
-                start: {
-                  type: 'string',
-                  description: 'Return recovery records that occurred after or during this time (ISO 8601)',
-                },
-                end: {
-                  type: 'string',
-                  description: 'Return recovery records that intersect this time or ended before this time (ISO 8601)',
-                },
-                nextToken: {
-                  type: 'string',
-                  description: 'Next token from the previous response to get the next page',
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: 'whoop-get-recovery-for-cycle',
-            description: 'Get recovery data for a specific cycle',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                cycleId: {
-                  type: 'number',
-                  description: 'ID of the cycle to get recovery data for',
-                },
-              },
-              required: ['cycleId'],
-            },
-          },
-          // Sleep tools
-          {
-            name: 'whoop-get-sleep-by-id',
-            description: 'Get the sleep record for the specified ID',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                sleepId: {
-                  type: 'string',
-                  description: 'ID of the sleep record to retrieve',
-                },
-              },
-              required: ['sleepId'],
-            },
-          },
-          {
-            name: 'whoop-get-sleep-collection',
-            description: 'Get all sleep records for a user, paginated',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                limit: {
-                  type: 'number',
-                  description: 'Limit on the number of sleep records returned (max 25)',
-                },
-                start: {
-                  type: 'string',
-                  description: 'Return sleep records that occurred after or during this time (ISO 8601)',
-                },
-                end: {
-                  type: 'string',
-                  description: 'Return sleep records that intersect this time or ended before this time (ISO 8601)',
-                },
-                nextToken: {
-                  type: 'string',
-                  description: 'Next token from the previous response to get the next page',
-                },
-              },
-              required: [],
-            },
-          },
-          // Workout tools
-          {
-            name: 'whoop-get-workout-by-id',
-            description: 'Get the workout record for the specified ID',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                workoutId: {
-                  type: 'string',
-                  description: 'ID of the workout record to retrieve',
-                },
-              },
-              required: ['workoutId'],
-            },
-          },
-          {
-            name: 'whoop-get-workout-collection',
-            description: 'Get all workout records for a user, paginated',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                limit: {
-                  type: 'number',
-                  description: 'Limit on the number of workout records returned (max 25)',
-                },
-                start: {
-                  type: 'string',
-                  description: 'Return workout records that occurred after or during this time (ISO 8601)',
-                },
-                end: {
-                  type: 'string',
-                  description: 'Return workout records that intersect this time or ended before this time (ISO 8601)',
-                },
-                nextToken: {
-                  type: 'string',
-                  description: 'Next token from the previous response to get the next page',
-                },
-              },
-              required: [],
-            },
-          },
-          // OAuth tools
-          {
-            name: 'whoop-get-authorization-url',
-            description: 'Get the authorization URL for OAuth flow',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: 'whoop-exchange-code-for-token',
-            description: 'Exchange authorization code for access token',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'Authorization code from OAuth callback',
-                },
-              },
-              required: ['code'],
-            },
-          },
-          {
-            name: 'whoop-refresh-token',
-            description: 'Refresh access token using refresh token',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                refreshToken: {
-                  type: 'string',
-                  description: 'Refresh token to use for getting new access token',
-                },
-              },
-              required: ['refreshToken'],
-            },
-          },
-          {
-            name: 'whoop-set-access-token',
-            description: 'Set the access token for API calls',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                accessToken: {
-                  type: 'string',
-                  description: 'Access token to use for API calls',
-                },
-              },
-              required: ['accessToken'],
-            },
-          },
-        ] as Tool[],
+        content: [{ type: 'text' as const, text: `Error: ${msg}${hint}` }],
+        isError: true,
       };
-    });
+    }
+  });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      try {
-        switch (name) {
-          // User tools
-          case 'whoop-get-user-profile': {
-            const result = await this.whoopClient.getUserProfile();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-user-body-measurements': {
-            const result = await this.whoopClient.getUserBodyMeasurements();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-revoke-user-access': {
-            await this.whoopClient.revokeUserAccess();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'User access revoked successfully',
-                },
-              ],
-            };
-          }
-
-          // Cycle tools
-          case 'whoop-get-cycle-by-id': {
-            if (!args || typeof args.cycleId !== 'number') {
-              throw new Error('cycleId is required and must be a number');
-            }
-            const result = await this.whoopClient.getCycleById(args.cycleId);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-cycle-collection': {
-            const result = await this.whoopClient.getCycleCollection({
-              limit: args?.limit as number | undefined,
-              start: args?.start as string | undefined,
-              end: args?.end as string | undefined,
-              nextToken: args?.nextToken as string | undefined,
-            });
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-sleep-for-cycle': {
-            if (!args || typeof args.cycleId !== 'number') {
-              throw new Error('cycleId is required and must be a number');
-            }
-            const result = await this.whoopClient.getSleepForCycle(args.cycleId);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          // Recovery tools
-          case 'whoop-get-recovery-collection': {
-            const result = await this.whoopClient.getRecoveryCollection({
-              limit: args?.limit as number | undefined,
-              start: args?.start as string | undefined,
-              end: args?.end as string | undefined,
-              nextToken: args?.nextToken as string | undefined,
-            });
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-recovery-for-cycle': {
-            if (!args || typeof args.cycleId !== 'number') {
-              throw new Error('cycleId is required and must be a number');
-            }
-            const result = await this.whoopClient.getRecoveryForCycle(args.cycleId);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          // Sleep tools
-          case 'whoop-get-sleep-by-id': {
-            if (!args || typeof args.sleepId !== 'string') {
-              throw new Error('sleepId is required and must be a string');
-            }
-            const result = await this.whoopClient.getSleepById(args.sleepId);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-sleep-collection': {
-            const result = await this.whoopClient.getSleepCollection({
-              limit: args?.limit as number | undefined,
-              start: args?.start as string | undefined,
-              end: args?.end as string | undefined,
-              nextToken: args?.nextToken as string | undefined,
-            });
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          // Workout tools
-          case 'whoop-get-workout-by-id': {
-            if (!args || typeof args.workoutId !== 'string') {
-              throw new Error('workoutId is required and must be a string');
-            }
-            const result = await this.whoopClient.getWorkoutById(args.workoutId);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-get-workout-collection': {
-            const result = await this.whoopClient.getWorkoutCollection({
-              limit: args?.limit as number | undefined,
-              start: args?.start as string | undefined,
-              end: args?.end as string | undefined,
-              nextToken: args?.nextToken as string | undefined,
-            });
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          // OAuth tools
-          case 'whoop-get-authorization-url': {
-            const url = this.whoopClient.getAuthorizationUrl();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Authorization URL: ${url}`,
-                },
-              ],
-            };
-          }
-
-          case 'whoop-exchange-code-for-token': {
-            if (!args || typeof args.code !== 'string') {
-              throw new Error('code is required and must be a string');
-            }
-            const result = await this.whoopClient.exchangeCodeForToken(args.code);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-refresh-token': {
-            if (!args || typeof args.refreshToken !== 'string') {
-              throw new Error('refreshToken is required and must be a string');
-            }
-            const result = await this.whoopClient.refreshToken(args.refreshToken);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'whoop-set-access-token': {
-            if (!args || typeof args.accessToken !== 'string') {
-              throw new Error('accessToken is required and must be a string');
-            }
-            this.whoopClient.setAccessToken(args.accessToken);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Access token set successfully',
-                },
-              ],
-            };
-          }
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    });
-  }
-
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('WHOOP MCP Server started');
-  }
+  return server;
 }

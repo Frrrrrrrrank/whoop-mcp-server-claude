@@ -11,177 +11,144 @@ import {
   WhoopSleepCollection,
   WhoopWorkout,
   WhoopWorkoutCollection,
-  PaginationParams
+  PaginationParams,
 } from './types.js';
+import { TokenStore } from './token-store.js';
+
+const WHOOP_API_BASE = 'https://api.prod.whoop.com/developer/v2';
+const WHOOP_OAUTH_BASE = 'https://api.prod.whoop.com/oauth/oauth2';
+const WHOOP_SCOPES = [
+  'read:recovery',
+  'read:cycles',
+  'read:workout',
+  'read:sleep',
+  'read:profile',
+  'read:body_measurement',
+  'offline',
+];
 
 export class WhoopApiClient {
   private client: AxiosInstance;
-  private config: WhoopApiConfig;
 
-  constructor(config: WhoopApiConfig) {
-    this.config = config;
+  constructor(private config: WhoopApiConfig, private tokenStore: TokenStore) {
     this.client = axios.create({
-      baseURL: 'https://api.prod.whoop.com/developer/v2',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      baseURL: WHOOP_API_BASE,
+      headers: { 'Content-Type': 'application/json' },
     });
 
-    // Add request interceptor to include access token
-    this.client.interceptors.request.use((config) => {
-      if (this.config.accessToken) {
-        config.headers.Authorization = `Bearer ${this.config.accessToken}`;
-      }
-      return config;
+    this.client.interceptors.request.use(async (cfg) => {
+      const token = await this.getValidAccessToken();
+      if (token) cfg.headers.Authorization = `Bearer ${token}`;
+      return cfg;
     });
   }
 
-  setAccessToken(accessToken: string) {
-    this.config.accessToken = accessToken;
+  private async getValidAccessToken(): Promise<string | null> {
+    const tok = this.tokenStore.get();
+    if (!tok) return null;
+    if (!this.tokenStore.isExpired()) return tok.access_token;
+    const refreshed = await this.refreshTokens(tok.refresh_token);
+    return refreshed.access_token;
   }
 
-  // User endpoints
-  async getUserProfile(): Promise<WhoopUserProfile> {
-    const response = await this.client.get('/user/profile/basic');
-    return response.data;
+  async refreshTokens(refreshToken: string) {
+    const form = new URLSearchParams();
+    form.append('grant_type', 'refresh_token');
+    form.append('refresh_token', refreshToken);
+    form.append('client_id', this.config.clientId);
+    form.append('client_secret', this.config.clientSecret);
+    form.append('scope', WHOOP_SCOPES.join(' '));
+
+    const resp = await axios.post(`${WHOOP_OAUTH_BASE}/token`, form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    this.tokenStore.set(resp.data);
+    return resp.data as { access_token: string; refresh_token: string; expires_in: number };
   }
 
-  async getUserBodyMeasurements(): Promise<WhoopBodyMeasurements> {
-    const response = await this.client.get('/user/measurement/body');
-    return response.data;
-  }
-
-  async revokeUserAccess(): Promise<void> {
-    await this.client.delete('/user/access');
-  }
-
-  // Cycle endpoints
-  async getCycleById(cycleId: number): Promise<WhoopCycle> {
-    const response = await this.client.get(`/cycle/${cycleId}`);
-    return response.data;
-  }
-
-  async getCycleCollection(params?: PaginationParams): Promise<WhoopCycleCollection> {
-    const queryParams = new URLSearchParams();
-    
-    if (params?.limit) queryParams.append('limit', params.limit.toString());
-    if (params?.start) queryParams.append('start', params.start);
-    if (params?.end) queryParams.append('end', params.end);
-    if (params?.nextToken) queryParams.append('nextToken', params.nextToken);
-
-    const url = `/cycle${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-    const response = await this.client.get(url);
-    return response.data;
-  }
-
-  async getSleepForCycle(cycleId: number): Promise<WhoopSleep[]> {
-    const response = await this.client.get(`/cycle/${cycleId}/sleep`);
-    return response.data;
-  }
-
-  // Recovery endpoints
-  async getRecoveryCollection(params?: PaginationParams): Promise<WhoopRecoveryCollection> {
-    const queryParams = new URLSearchParams();
-    
-    if (params?.limit) queryParams.append('limit', params.limit.toString());
-    if (params?.start) queryParams.append('start', params.start);
-    if (params?.end) queryParams.append('end', params.end);
-    if (params?.nextToken) queryParams.append('nextToken', params.nextToken);
-
-    const url = `/recovery${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-    const response = await this.client.get(url);
-    return response.data;
-  }
-
-  async getRecoveryForCycle(cycleId: number): Promise<WhoopRecovery[]> {
-    const response = await this.client.get(`/cycle/${cycleId}/recovery`);
-    return response.data;
-  }
-
-  // Sleep endpoints
-  async getSleepById(sleepId: string): Promise<WhoopSleep> {
-    const response = await this.client.get(`/activity/sleep/${sleepId}`);
-    return response.data;
-  }
-
-  async getSleepCollection(params?: PaginationParams): Promise<WhoopSleepCollection> {
-    const queryParams = new URLSearchParams();
-    
-    if (params?.limit) queryParams.append('limit', params.limit.toString());
-    if (params?.start) queryParams.append('start', params.start);
-    if (params?.end) queryParams.append('end', params.end);
-    if (params?.nextToken) queryParams.append('nextToken', params.nextToken);
-
-    const url = `/activity/sleep${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-    const response = await this.client.get(url);
-    return response.data;
-  }
-
-  // Workout endpoints
-  async getWorkoutById(workoutId: string): Promise<WhoopWorkout> {
-    const response = await this.client.get(`/activity/workout/${workoutId}`);
-    return response.data;
-  }
-
-  async getWorkoutCollection(params?: PaginationParams): Promise<WhoopWorkoutCollection> {
-    const queryParams = new URLSearchParams();
-    
-    if (params?.limit) queryParams.append('limit', params.limit.toString());
-    if (params?.start) queryParams.append('start', params.start);
-    if (params?.end) queryParams.append('end', params.end);
-    if (params?.nextToken) queryParams.append('nextToken', params.nextToken);
-
-    const url = `/activity/workout${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-    const response = await this.client.get(url);
-    return response.data;
-  }
-
-  // OAuth endpoints
-  getAuthorizationUrl(state?: string): string {
+  getAuthorizationUrl(state: string): string {
     const params = new URLSearchParams({
       client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
       response_type: 'code',
-      scope: 'read:recovery read:cycles read:workout read:sleep read:profile read:body_measurement'
+      scope: WHOOP_SCOPES.join(' '),
+      state,
     });
-    
-    if (state) {
-      params.append('state', state);
-    }
-    
-    return `https://api.prod.whoop.com/oauth/oauth2/auth?${params.toString()}`;
+    return `${WHOOP_OAUTH_BASE}/auth?${params.toString()}`;
   }
 
-  async exchangeCodeForToken(code: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
-    const formData = new URLSearchParams();
-    formData.append('client_id', this.config.clientId);
-    formData.append('client_secret', this.config.clientSecret);
-    formData.append('code', code);
-    formData.append('grant_type', 'authorization_code');
-    formData.append('redirect_uri', this.config.redirectUri);
+  async exchangeCodeForToken(code: string) {
+    const form = new URLSearchParams();
+    form.append('grant_type', 'authorization_code');
+    form.append('code', code);
+    form.append('client_id', this.config.clientId);
+    form.append('client_secret', this.config.clientSecret);
+    form.append('redirect_uri', this.config.redirectUri);
 
-    const response = await axios.post('https://api.prod.whoop.com/oauth/oauth2/token', formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+    const resp = await axios.post(`${WHOOP_OAUTH_BASE}/token`, form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-
-    return response.data;
+    this.tokenStore.set(resp.data);
+    return resp.data as { access_token: string; refresh_token: string; expires_in: number };
   }
 
-  async refreshToken(refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
-    const formData = new URLSearchParams();
-    formData.append('client_id', this.config.clientId);
-    formData.append('client_secret', this.config.clientSecret);
-    formData.append('refresh_token', refreshToken);
-    formData.append('grant_type', 'refresh_token');
+  // ---- WHOOP v2 endpoints ----
+  async getUserProfile(): Promise<WhoopUserProfile> {
+    return (await this.client.get('/user/profile/basic')).data;
+  }
 
-    const response = await axios.post('https://api.prod.whoop.com/oauth/oauth2/token', formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
-    });
+  async getUserBodyMeasurements(): Promise<WhoopBodyMeasurements> {
+    return (await this.client.get('/user/measurement/body')).data;
+  }
 
-    return response.data;
+  async revokeUserAccess(): Promise<void> {
+    await this.client.delete('/user/access');
+    this.tokenStore.clear();
+  }
+
+  async getCycleById(cycleId: number): Promise<WhoopCycle> {
+    return (await this.client.get(`/cycle/${cycleId}`)).data;
+  }
+
+  async getCycleCollection(params?: PaginationParams): Promise<WhoopCycleCollection> {
+    return (await this.client.get('/cycle', { params: this.buildPagination(params) })).data;
+  }
+
+  async getSleepForCycle(cycleId: number): Promise<WhoopSleep> {
+    return (await this.client.get(`/cycle/${cycleId}/sleep`)).data;
+  }
+
+  async getRecoveryCollection(params?: PaginationParams): Promise<WhoopRecoveryCollection> {
+    return (await this.client.get('/recovery', { params: this.buildPagination(params) })).data;
+  }
+
+  async getRecoveryForCycle(cycleId: number): Promise<WhoopRecovery> {
+    return (await this.client.get(`/cycle/${cycleId}/recovery`)).data;
+  }
+
+  async getSleepById(sleepId: string): Promise<WhoopSleep> {
+    return (await this.client.get(`/activity/sleep/${sleepId}`)).data;
+  }
+
+  async getSleepCollection(params?: PaginationParams): Promise<WhoopSleepCollection> {
+    return (await this.client.get('/activity/sleep', { params: this.buildPagination(params) })).data;
+  }
+
+  async getWorkoutById(workoutId: string): Promise<WhoopWorkout> {
+    return (await this.client.get(`/activity/workout/${workoutId}`)).data;
+  }
+
+  async getWorkoutCollection(params?: PaginationParams): Promise<WhoopWorkoutCollection> {
+    return (await this.client.get('/activity/workout', { params: this.buildPagination(params) })).data;
+  }
+
+  private buildPagination(p?: PaginationParams) {
+    if (!p) return undefined;
+    const out: Record<string, string | number> = {};
+    if (p.limit !== undefined) out.limit = p.limit;
+    if (p.start) out.start = p.start;
+    if (p.end) out.end = p.end;
+    if (p.nextToken) out.nextToken = p.nextToken;
+    return out;
   }
 }

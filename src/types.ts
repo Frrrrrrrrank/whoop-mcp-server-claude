@@ -1,4 +1,3 @@
-// WHOOP API Response Types
 export interface WhoopUserProfile {
   user_id: number;
   email: string;
@@ -36,15 +35,12 @@ export interface WhoopCycleCollection {
   next_token?: string;
 }
 
-export interface WhoopRecoveryScore {
-  score_state: string;
-  score?: {
-    recovery_score: number;
-    resting_heart_rate: number;
-    hrv_rmssd_milli: number;
-    spo2_percentage: number;
-    skin_temp_celsius: number;
-  };
+export interface WhoopRecoveryScoreInner {
+  recovery_score: number;
+  resting_heart_rate: number;
+  hrv_rmssd_milli: number;
+  spo2_percentage: number;
+  skin_temp_celsius: number;
 }
 
 export interface WhoopRecovery {
@@ -57,7 +53,7 @@ export interface WhoopRecovery {
   end: string;
   timezone_offset: string;
   score_state: string;
-  score?: WhoopRecoveryScore['score'];
+  score?: WhoopRecoveryScoreInner;
 }
 
 export interface WhoopRecoveryCollection {
@@ -152,12 +148,10 @@ export interface WhoopWorkoutCollection {
   next_token?: string;
 }
 
-// MCP Server Types
 export interface WhoopApiConfig {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
-  accessToken?: string;
 }
 
 export interface PaginationParams {
