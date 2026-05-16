@@ -80,6 +80,10 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     authenticated: !!tokenStore.get(),
+    // true only when Upstash env vars are set, i.e. the real cold-start
+    // fix is active. If this is false, updating WHOOP_REFRESH_TOKEN is
+    // just a stopgap that breaks again on the next restart.
+    durable: !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN),
     redirectUri: config.redirectUri,
   });
 });
