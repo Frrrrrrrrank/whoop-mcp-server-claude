@@ -15,3 +15,10 @@ services:
         sync: false
       - key: WHOOP_REFRESH_TOKEN
         sync: false
+      # Durable token storage so the rotated WHOOP refresh token survives
+      # free-tier cold starts and redeploys. Get these from upstash.com
+      # (free Redis DB -> "REST API" panel).
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

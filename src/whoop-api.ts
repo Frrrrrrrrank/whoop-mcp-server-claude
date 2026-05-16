@@ -63,6 +63,8 @@ export class WhoopApiClient {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     this.tokenStore.set(resp.data);
+    // WHOOP rotated the refresh token — persist it durably before we move on.
+    await this.tokenStore.persist();
     return resp.data as { access_token: string; refresh_token: string; expires_in: number };
   }
 
@@ -89,6 +91,8 @@ export class WhoopApiClient {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     this.tokenStore.set(resp.data);
+    // Seed durable storage right after the OAuth code exchange.
+    await this.tokenStore.persist();
     return resp.data as { access_token: string; refresh_token: string; expires_in: number };
   }
 

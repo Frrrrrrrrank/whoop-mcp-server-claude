@@ -9,7 +9,8 @@ Forked from [nissand/whoop-mcp-server-claude](https://github.com/nissand/whoop-m
 - Transport: `stdio` → `StreamableHTTPServerTransport` (MCP SDK 1.x)
 - OAuth: chat-driven copy-paste flow → browser flow at `/authorize` → `/callback`
 - Token storage: per-process file → in-memory `TokenStore` with automatic refresh
-- Cold-start survival: optional `WHOOP_REFRESH_TOKEN` env var bootstraps token on boot
+- Cold-start survival: durable token store (Upstash Redis REST) persists every
+  refresh-token rotation; `WHOOP_REFRESH_TOKEN` env var is now only a first-run seed
 - Removed: `auth-app.js`, `start-mcp-server.js`, `check-redirect-uri.js`, stdio entry points
 
 ## Endpoints
@@ -30,17 +31,36 @@ Forked from [nissand/whoop-mcp-server-claude](https://github.com/nissand/whoop-m
 | `WHOOP_CLIENT_SECRET` | yes | From WHOOP developer portal |
 | `PUBLIC_URL` | yes | e.g. `https://your-app.onrender.com` (no trailing slash) |
 | `PORT` | no | Default 3000; Render sets automatically |
-| `WHOOP_REFRESH_TOKEN` | no | Pre-seeds token on boot to survive cold starts |
+| `WHOOP_REFRESH_TOKEN` | no | First-run seed only (single-use; WHOOP rotates it) |
+| `UPSTASH_REDIS_REST_URL` | recommended | Durable token store; from upstash.com REST API panel |
+| `UPSTASH_REDIS_REST_TOKEN` | recommended | Paired auth token for the Upstash REST API |
 
 The OAuth redirect URI is always `${PUBLIC_URL}/callback`. Register that exact value in the WHOOP developer portal.
+
+### Why durable storage is required on free tiers
+
+WHOOP **rotates the refresh token on every refresh** and immediately invalidates
+the previous one. A purely in-memory store loses the latest token whenever the
+process restarts (Render free Web Services sleep after 15 min idle and restart on
+every deploy). The `WHOOP_REFRESH_TOKEN` env var only ever holds the *original*
+token, which WHOOP kills after the first refresh — so without durable storage you
+get `invalid_grant` ("authorization expired") on the next cold start.
+
+With `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` set, every rotation is
+written to Upstash and reloaded on boot, so the server self-heals across cold
+starts and redeploys with no manual re-authorization. Setup: create a free
+database at [upstash.com](https://upstash.com) → open it → **REST API** panel →
+copy the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` values into
+Render env vars.
 
 ## Deploy to Render (free tier)
 
 1. Push this repo (or your fork) to GitHub.
 2. In Render dashboard: **New → Web Service → Connect repo**. Render detects `render.yaml` and offers a Blueprint deploy.
 3. Set env vars `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `PUBLIC_URL`. (Once first deploy completes, copy the `.onrender.com` URL into `PUBLIC_URL` and redeploy.)
-4. Update the redirect URI in the WHOOP developer portal to `https://<your-service>.onrender.com/callback`.
-5. Visit the service URL, click **Connect WHOOP**, complete OAuth. Optionally copy the displayed refresh token into a `WHOOP_REFRESH_TOKEN` env var and redeploy so the server survives cold starts.
+4. Create a free Redis at [upstash.com](https://upstash.com), open its **REST API** panel, and set `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` env vars in Render. (Strongly recommended — without this the token dies on the next cold start.)
+5. Update the redirect URI in the WHOOP developer portal to `https://<your-service>.onrender.com/callback`.
+6. Visit the service URL, click **Connect WHOOP**, complete OAuth once. With Upstash configured the token is now persisted and rotated automatically — no copy-paste, no redeploy, no re-authorization needed afterwards.
 
 ## Connect from claude.ai
 
@@ -78,7 +98,10 @@ OAuth happens at `/authorize`; there is no MCP tool that takes raw codes/tokens 
 
 ## Architecture notes
 
-The server is **single-tenant**: one WHOOP token is held in memory and used for all MCP requests. The MCP endpoint itself is unauthenticated — the secrecy of the `.onrender.com` URL is the only access control. Acceptable for a personal connector; do not share the URL.
+The server is **single-tenant**: one WHOOP token is held in memory (backed by the
+Upstash durable store) and used for all MCP requests. The MCP endpoint itself is
+unauthenticated — the secrecy of the `.onrender.com` URL is the only access
+control. Acceptable for a personal connector; do not share the URL.
 
 To make it multi-tenant or production-grade, swap the in-memory `TokenStore` for a per-session-token store keyed by either:
 - An MCP-side bearer token (configure in Claude as Authorization header), or

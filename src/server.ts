@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { WhoopApiClient } from './whoop-api.js';
 import { TokenStore } from './token-store.js';
+import { createPersistence } from './persistence.js';
 import { buildMcpServer } from './mcp-server.js';
 import { WhoopApiConfig } from './types.js';
 
@@ -26,15 +27,34 @@ const config: WhoopApiConfig = {
 };
 
 const tokenStore = new TokenStore();
+tokenStore.setPersistence(createPersistence());
 const whoopClient = new WhoopApiClient(config, tokenStore);
 
-// Bootstrap from refresh token in env (lets the server survive Render cold starts)
-if (process.env.WHOOP_REFRESH_TOKEN && !tokenStore.get()) {
-  whoopClient
-    .refreshTokens(process.env.WHOOP_REFRESH_TOKEN)
-    .then(() => console.log('Loaded WHOOP tokens from WHOOP_REFRESH_TOKEN env var'))
-    .catch((e) => console.error('Failed to refresh from WHOOP_REFRESH_TOKEN:', e.message));
-}
+// Boot order matters. WHOOP rotates the refresh token on every refresh,
+// so the durable store always holds the *latest* valid token while the
+// WHOOP_REFRESH_TOKEN env var only ever holds the original (single-use,
+// now-dead) one. Therefore: durable store first, env var only as a
+// first-run seed.
+(async () => {
+  try {
+    if (await tokenStore.hydrate()) {
+      console.log('Loaded WHOOP token from durable store (survives cold starts).');
+      return;
+    }
+    if (process.env.WHOOP_REFRESH_TOKEN) {
+      await whoopClient.refreshTokens(process.env.WHOOP_REFRESH_TOKEN);
+      console.log(
+        'Bootstrapped from WHOOP_REFRESH_TOKEN env var and persisted the ' +
+          'rotated token to the durable store.'
+      );
+      return;
+    }
+    console.warn('No durable token and no WHOOP_REFRESH_TOKEN. Visit /authorize to connect.');
+  } catch (e) {
+    console.error('Token bootstrap failed:', (e as Error).message);
+    console.error('Re-authorize at /authorize to recover.');
+  }
+})();
 
 const oauthStates = new Map<string, number>();
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -120,13 +140,23 @@ app.get('/callback', async (req, res) => {
 <body><div class="card">
   <h1 class="ok">✅ WHOOP connected</h1>
   <p>The MCP server now has a valid WHOOP token. You can close this tab and use MCP tools in Claude.</p>
-  <div class="warn">
-    <p><b>Optional but recommended for Render free tier:</b></p>
-    <p>Render free Web Service sleeps after 15 min of inactivity. On wakeup, the in-memory token is gone. To survive cold starts, copy the refresh token below into a Render env var named <code>WHOOP_REFRESH_TOKEN</code>:</p>
+  ${
+    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+      ? `<div class="warn" style="background:#e9f7ef;border-left-color:#1a7a3a">
+    <p><b>Durable storage is active.</b> This token (and every rotation after it)
+    is saved to Upstash, so it survives Render cold starts and redeploys
+    automatically. You do <b>not</b> need to copy anything or re-authorize.</p>
+  </div>`
+      : `<div class="warn">
+    <p><b>⚠ Durable storage is NOT configured.</b> Render free Web Service sleeps
+    after 15 min and WHOOP rotates the refresh token on every refresh, so this
+    token will die on the next cold start. Set <code>UPSTASH_REDIS_REST_URL</code>
+    and <code>UPSTASH_REDIS_REST_TOKEN</code> env vars (free Upstash Redis) to fix
+    this permanently. Until then, the single-use fallback token is:</p>
     <code>${tok.refresh_token}</code>
-    <p>Then redeploy. The server will auto-refresh on startup.</p>
-  </div>
-  <p>Token expires in ${tok.expires_in} seconds; the server will refresh it automatically as long as it has the refresh token.</p>
+  </div>`
+  }
+  <p>Token expires in ${tok.expires_in} seconds; the server refreshes it automatically.</p>
 </div></body></html>`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
