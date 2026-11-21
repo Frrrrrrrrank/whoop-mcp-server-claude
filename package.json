@@ -8,9 +8,19 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "watch": "tsx watch src/index.ts"
+    "watch": "tsx watch src/index.ts",
+    "test": "tsx --test test/refresh.test.ts"
   },
-  "keywords": ["mcp", "whoop", "api", "fitness", "health", "remote", "sse", "http"],
+  "keywords": [
+    "mcp",
+    "whoop",
+    "api",
+    "fitness",
+    "health",
+    "remote",
+    "sse",
+    "http"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"

@@ -34,6 +34,7 @@ Forked from [nissand/whoop-mcp-server-claude](https://github.com/nissand/whoop-m
 | `WHOOP_REFRESH_TOKEN` | no | First-run seed only (single-use; WHOOP rotates it) |
 | `UPSTASH_REDIS_REST_URL` | recommended | Durable token store; from upstash.com REST API panel |
 | `UPSTASH_REDIS_REST_TOKEN` | recommended | Paired auth token for the Upstash REST API |
+| `ALERT_WEBHOOK_URL` | no | Webhook for re-auth / save-failure alerts (Feishu bot format) |
 
 The OAuth redirect URI is always `${PUBLIC_URL}/callback`. Register that exact value in the WHOOP developer portal.
 
@@ -52,6 +53,37 @@ starts and redeploys with no manual re-authorization. Setup: create a free
 database at [upstash.com](https://upstash.com) → open it → **REST API** panel →
 copy the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` values into
 Render env vars.
+
+### Refreshes never overlap
+
+WHOOP's OAuth server revokes the whole token chain when a refresh token is
+presented twice. Several clients hitting the server right after the access
+token expires (claude.ai, scripts, a poller), or the old and new instance
+during a Render deploy, used to do exactly that and killed the grant roughly
+weekly. Now:
+
+- one refresh per process at a time (concurrent requests share it);
+- a Redis lock (`whoop:refresh-lock`, `SET NX PX`) so only one instance refreshes;
+- before refreshing, the newest stored token is reloaded, and an older stored
+  copy never replaces a newer in-memory one;
+- saves to Upstash are retried; if they keep failing, the state becomes `degraded`.
+
+When WHOOP rejects the refresh token (`invalid_grant`), the token is dropped,
+the state becomes `reauth_required`, tool errors say where to reconnect, and an
+optional webhook fires.
+
+### `/health`
+
+Always HTTP 200 (Render's health check uses it). Fields:
+`authenticated` (a token is held and WHOOP has not rejected it), `state`
+(`ok` / `degraded` / `reauth_required`), `last_refresh_at`, `last_error`,
+`durable`, `alerts`. `/health?deep=1` also makes one real WHOOP call and adds
+`whoop_call_ok`.
+
+### Alerts (optional)
+
+Set `ALERT_WEBHOOK_URL` to a Feishu custom-bot webhook (or any endpoint that
+accepts `{"text": ...}`) to be told when re-authorization is needed or saves fail.
 
 ## Deploy to Render (free tier)
 

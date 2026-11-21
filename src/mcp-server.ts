@@ -154,9 +154,11 @@ export function buildMcpServer(client: WhoopApiClient): Server {
         typeof err === 'object' && err !== null && 'response' in err
           ? ((err as { response?: { status?: number } }).response?.status ?? '')
           : '';
-      const hint = status === 401 || /unauthorized|token/i.test(msg)
-        ? '\n\nHint: WHOOP token is missing or expired. Visit the /authorize endpoint of this server to re-authenticate.'
-        : '';
+      const hint = err instanceof Error && err.name === 'AuthRequiredError'
+        ? ''
+        : status === 401 || /unauthorized|token/i.test(msg)
+          ? `\n\nHint: WHOOP token is missing or expired. Open ${client.authorizeUrl} to re-authenticate.`
+          : '';
       return {
         content: [{ type: 'text' as const, text: `Error: ${msg}${hint}` }],
         isError: true,

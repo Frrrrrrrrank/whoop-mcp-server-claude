@@ -30,18 +30,33 @@ const tokenStore = new TokenStore();
 tokenStore.setPersistence(createPersistence());
 const whoopClient = new WhoopApiClient(config, tokenStore);
 
+// Alerts go to an optional webhook (Feishu custom bot format; also accepted by
+// most "incoming webhook" endpoints that read a `text` field).
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL;
+tokenStore.onAlert = (message: string) => {
+  const text = `[WHOOP MCP] ${message}
+Reconnect: ${PUBLIC_URL}/authorize
+Status: ${PUBLIC_URL}/health`;
+  if (!ALERT_WEBHOOK_URL) return;
+  void fetch(ALERT_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ msg_type: 'text', content: { text }, text }),
+  }).catch((e) => console.error('[alert] webhook failed:', (e as Error).message));
+};
+
 // Boot order matters. WHOOP rotates the refresh token on every refresh,
 // so the durable store always holds the *latest* valid token while the
 // WHOOP_REFRESH_TOKEN env var only ever holds the original (single-use,
 // now-dead) one. Therefore: durable store first, env var only as a
-// first-run seed.
-(async () => {
+// first-run seed. Requests wait on `ready` so none races the hydration.
+tokenStore.ready = (async () => {
   try {
     if (await tokenStore.hydrate()) {
       console.log('Loaded WHOOP token from durable store (survives cold starts).');
       return;
     }
-    if (process.env.WHOOP_REFRESH_TOKEN) {
+    if (process.env.WHOOP_REFRESH_TOKEN && tokenStore.getStatus().state !== 'reauth_required') {
       await whoopClient.refreshTokens(process.env.WHOOP_REFRESH_TOKEN);
       console.log(
         'Bootstrapped from WHOOP_REFRESH_TOKEN env var and persisted the ' +
@@ -49,7 +64,7 @@ const whoopClient = new WhoopApiClient(config, tokenStore);
       );
       return;
     }
-    console.warn('No durable token and no WHOOP_REFRESH_TOKEN. Visit /authorize to connect.');
+    console.warn('No usable WHOOP token. Visit /authorize to connect.');
   } catch (e) {
     console.error('Token bootstrap failed:', (e as Error).message);
     console.error('Re-authorize at /authorize to recover.');
@@ -76,20 +91,45 @@ const app = express();
 app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'] }));
 app.use(express.json({ limit: '4mb' }));
 
-app.get('/health', (_req, res) => {
-  res.json({
+app.get('/health', async (req, res) => {
+  await tokenStore.ready;
+  const status = tokenStore.getStatus();
+  const body: Record<string, unknown> = {
     ok: true,
-    authenticated: !!tokenStore.get(),
+    // true only when a token is held AND WHOOP has not rejected it.
+    authenticated: tokenStore.isAuthenticated(),
+    state: status.state,
+    last_refresh_at: status.last_refresh_at ? new Date(status.last_refresh_at).toISOString() : null,
+    last_error: status.last_error ?? null,
+    last_error_at: status.last_error_at ? new Date(status.last_error_at).toISOString() : null,
     // true only when Upstash env vars are set, i.e. the real cold-start
     // fix is active. If this is false, updating WHOOP_REFRESH_TOKEN is
     // just a stopgap that breaks again on the next restart.
-    durable: !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN),
+    durable: tokenStore.durable,
+    alerts: !!ALERT_WEBHOOK_URL,
     redirectUri: config.redirectUri,
-  });
+  };
+  // ?deep=1 makes one real WHOOP call (refreshing if needed) so a monitor can
+  // tell a live grant from a stored-but-dead one.
+  if (req.query.deep) {
+    try {
+      await whoopClient.getUserProfile();
+      body.whoop_call_ok = true;
+    } catch (e) {
+      body.whoop_call_ok = false;
+      body.whoop_call_error = (e as Error).message;
+      body.authenticated = tokenStore.isAuthenticated();
+      body.state = tokenStore.getStatus().state;
+    }
+  }
+  // Always 200: Render uses this path as its health check, and an unauthorized
+  // service must stay up so /authorize is reachable. Monitors read `authenticated`.
+  res.json(body);
 });
 
-app.get('/', (_req, res) => {
-  const authed = !!tokenStore.get();
+app.get('/', async (_req, res) => {
+  await tokenStore.ready;
+  const authed = tokenStore.isAuthenticated();
   res.type('html').send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>WHOOP MCP Server</title>
 <style>
@@ -103,7 +143,8 @@ app.get('/', (_req, res) => {
 <body><div class="card">
   <h1>WHOOP MCP Server</h1>
   <p>Remote MCP server exposing the WHOOP v2 API to MCP clients (Claude.ai, Claude Desktop, etc.).</p>
-  <p>Status: ${authed ? '<span class="ok">authenticated</span>' : '<b>not authenticated</b>'}</p>
+  <p>Status: ${authed ? '<span class="ok">authenticated</span>' : '<b>not authenticated — reconnect below</b>'}</p>
+  ${tokenStore.getStatus().last_error ? `<p class="muted">Last error: ${tokenStore.getStatus().last_error}</p>` : ''}
   <p><a class="btn" href="/authorize">${authed ? 'Re-connect' : 'Connect'} WHOOP</a></p>
   <hr>
   <p class="muted"><b>MCP endpoint</b>: <code>${PUBLIC_URL}/mcp</code></p>
